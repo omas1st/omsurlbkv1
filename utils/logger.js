@@ -2,17 +2,6 @@
 const winston = require('winston');
 require('winston-daily-rotate-file');
 
-const logDir = process.env.LOG_DIR || 'logs';
-
-const transport = new winston.transports.DailyRotateFile({
-  dirname: logDir,
-  filename: 'app-%DATE%.log',
-  datePattern: 'YYYY-MM-DD',
-  maxFiles: '14d',
-  zippedArchive: true,
-  level: process.env.LOG_LEVEL || 'info',
-});
-
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
@@ -20,10 +9,23 @@ const logger = winston.createLogger({
     winston.format.printf((info) => `${info.timestamp} [${info.level.toUpperCase()}]: ${info.message}`)
   ),
   transports: [
-    transport,
     new winston.transports.Console({ format: winston.format.simple() }),
   ],
   exitOnError: false,
 });
+
+// Add file rotation transport only when NOT on Vercel
+if (!process.env.VERCEL) {
+  const logDir = process.env.LOG_DIR || 'logs';
+  const transport = new winston.transports.DailyRotateFile({
+    dirname: logDir,
+    filename: 'app-%DATE%.log',
+    datePattern: 'YYYY-MM-DD',
+    maxFiles: '14d',
+    zippedArchive: true,
+    level: process.env.LOG_LEVEL || 'info',
+  });
+  logger.add(transport);
+}
 
 module.exports = logger;
