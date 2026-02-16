@@ -53,25 +53,22 @@ exports.sendContactMessage = async (req, res) => {
       },
     };
 
-    // If user provided email, set as reply-to
     if (userEmail) {
       emailData.context.replyTo = userEmail;
     }
 
-    // Send email in the background – do NOT await it
-    sendEmail(emailData)
-      .then(result => {
-        if (result.success) {
-          logger.info(`Contact email sent to admin from ${userEmail || 'anonymous'}`);
-        } else {
-          logger.error('Failed to send contact email:', result);
-        }
-      })
-      .catch(err => {
-        logger.error('Unexpected error in background email sending:', err);
-      });
+    // Send email and WAIT for it (with a timeout)
+    const emailResult = await sendEmail(emailData);
 
-    // Create notification for logged-in user (background, don't await)
+    if (!emailResult.success) {
+      logger.error('Failed to send contact email:', emailResult);
+      // We still return success to the user, but log the error
+      logger.warn('Email sending failed, but user will see success');
+    } else {
+      logger.info(`Contact email sent to admin from ${userEmail || 'anonymous'}`);
+    }
+
+    // Create notification for logged-in user (fire and forget)
     if (userId) {
       Notification.createNotification(userId, {
         type: 'contact_sent',
@@ -88,10 +85,9 @@ exports.sendContactMessage = async (req, res) => {
       });
     }
 
-    // Log the contact message attempt
     logger.info(`Contact message processed from ${userEmail || 'anonymous'}`);
 
-    // Respond immediately to the user
+    // Respond after email attempt (successful or failed)
     res.status(200).json({
       success: true,
       message: 'Message sent successfully',

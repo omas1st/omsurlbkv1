@@ -21,49 +21,51 @@ function initializeTransporter() {
           user: 'apikey',
           pass: SENDGRID_API_KEY,
         },
-        connectionTimeout: 60000, // 60 seconds
-        socketTimeout: 60000,
+        connectionTimeout: 30000,
+        socketTimeout: 30000,
       });
       logger.info('Email service: Using SendGrid');
     } else if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
       if (SMTP_PASS.includes(' ')) {
-        logger.warn('SMTP password contains spaces. Please remove them in your .env file.');
+        logger.warn('SMTP password contains spaces. Please remove them.');
       }
 
-      logger.info(`SMTP configuration: host=${SMTP_HOST}, port=${SMTP_PORT}, user=${SMTP_USER}`);
+      logger.info(`SMTP config: host=${SMTP_HOST}, port=${SMTP_PORT}, user=${SMTP_USER}`);
 
       transporter = nodemailer.createTransport({
         host: SMTP_HOST,
         port: Number(SMTP_PORT) || 587,
-        secure: Number(SMTP_PORT) === 465, // true for 465, false for others
+        secure: Number(SMTP_PORT) === 465,
         auth: {
           user: SMTP_USER,
           pass: SMTP_PASS,
         },
-        connectionTimeout: 60000,
-        socketTimeout: 60000,
+        connectionTimeout: 30000,
+        socketTimeout: 30000,
         tls: {
           rejectUnauthorized: false,
         },
+        // Force IPv4 to avoid IPv6 delays
+        family: 4,
         debug: true,
         logger: true,
       });
 
-      // Test connection (but don't block startup)
+      // Test connection asynchronously (doesn't block startup)
       transporter.verify((error, success) => {
         if (error) {
           logger.error('SMTP connection test failed:', error);
         } else {
-          logger.info('SMTP connection test successful - server is ready');
+          logger.info('SMTP connection test successful');
         }
       });
 
       logger.info(`Email service: Using SMTP (${SMTP_HOST}:${SMTP_PORT})`);
     } else {
-      logger.warn('Email service: No SMTP configuration found, using Ethereal test account');
+      logger.warn('No SMTP config, using Ethereal test account');
       nodemailer.createTestAccount((err, account) => {
         if (err) {
-          logger.error('Failed to create test email account:', err);
+          logger.error('Failed to create test account:', err);
           return;
         }
         transporter = nodemailer.createTransport({
@@ -74,10 +76,10 @@ function initializeTransporter() {
             user: account.user,
             pass: account.pass,
           },
-          connectionTimeout: 60000,
-          socketTimeout: 60000,
+          connectionTimeout: 30000,
+          socketTimeout: 30000,
         });
-        logger.info(`Email service: Using Ethereal test account: ${account.user}`);
+        logger.info(`Using Ethereal test account: ${account.user}`);
       });
     }
   } catch (error) {
@@ -90,7 +92,7 @@ initializeTransporter();
 function renderTemplate(templateName, context = {}) {
   const templates = {
     welcome: `Hello ${context.username || ''},\n\nWelcome to Short.ly!\n\nYou can login here: ${context.loginUrl || ''}\n\nThanks,\nShort.ly Team\n`,
-    'password-reset': `Hello ${context.username || ''},\n\nA password reset was requested for your account. Use the link below to reset:\n${context.resetUrl || ''}\n\nThis link expires in ${context.expiry || '10 minutes'}.\n`,
+    'password-reset': `Hello ${context.username || ''},\n\nA password reset was requested. Use the link below to reset:\n${context.resetUrl || ''}\n\nThis link expires in ${context.expiry || '10 minutes'}.\n`,
     'password-reset-success': `Hello ${context.username || ''},\n\nYour password was reset successfully. You can login here: ${context.loginUrl || ''}\n\nIf this wasn't you, contact support.\n`,
     'contact-message': `New contact message from ${context.email || 'Anonymous'}:\n\n${context.message || ''}\n\n---\nReceived at: ${context.timestamp || new Date().toLocaleString()}\nUser ID: ${context.userId || 'Not logged in'}\n`,
     default: context.text || templateName || '',
@@ -105,7 +107,7 @@ async function sendEmail({
   text = null,
   template = null,
   context = {},
-  timeout = 60000, // 60 seconds
+  timeout = 25000, // 25 seconds
 } = {}) {
   try {
     let waitTime = 0;
@@ -152,7 +154,7 @@ async function sendEmail({
     logger.error('Send email error:', err);
     // In development without SMTP, simulate success
     if (process.env.NODE_ENV !== 'production' && !SMTP_HOST) {
-      logger.warn('Email not sent in development mode. In production, configure SMTP settings.');
+      logger.warn('Email not sent in development mode. In production, configure SMTP.');
       return { success: true, info: { messageId: 'dev-' + Date.now() }, devMode: true };
     }
     return {
