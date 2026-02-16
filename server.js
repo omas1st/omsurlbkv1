@@ -100,6 +100,24 @@ app.use((req, res, next) => {
   next();
 });
 
+// ======================
+// DATABASE CONNECTION MIDDLEWARE (for Vercel serverless)
+// ======================
+// Ensures MongoDB is connected before any route handler runs.
+// This runs on every request but connectDB() is idempotent.
+app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      await connectDB();
+      logger.info('Database connected via request middleware');
+    } catch (err) {
+      logger.error(`Database connection failed: ${err.message}`);
+      return res.status(500).json({ error: 'Database connection error' });
+    }
+  }
+  next();
+});
+
 // ----------------------
 // Basic security / performance middleware
 // ----------------------
