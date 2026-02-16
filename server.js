@@ -39,20 +39,66 @@ const contactRoutes = require('./routes/contactRoutes');
 const { errorHandler, notFound } = require('./middleware/error');
 const { protect, optionalAuth } = require('./middleware/auth');
 
-// Initialize app + server + io
+// Initialize express app
 const app = express();
-const server = http.createServer(app);
 
-const io = new socketIo.Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['http://localhost:3000'],
-    credentials: true
-  },
-  pingTimeout: 60000
+// Conditionally create HTTP server and Socket.IO only when NOT on Vercel
+let server;
+let io;
+
+if (!process.env.VERCEL) {
+  // Create HTTP server
+  server = http.createServer(app);
+
+  // Initialize Socket.IO
+  io = new socketIo.Server(server, {
+    cors: {
+      origin: process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['http://localhost:3000'],
+      credentials: true
+    },
+    pingTimeout: 60000
+  });
+
+  // make io globally available (only if it exists)
+  global.io = io;
+
+  // Socket.io event handlers
+  io.on('connection', (socket) => {
+    logger.info(`New client connected: ${socket.id}`);
+
+    socket.on('join-analytics', (alias) => {
+      socket.join(`analytics:${alias}`);
+      logger.info(`Socket ${socket.id} joined analytics:${alias}`);
+    });
+
+    socket.on('leave-analytics', (alias) => {
+      socket.leave(`analytics:${alias}`);
+      logger.info(`Socket ${socket.id} left analytics:${alias}`);
+    });
+
+    socket.on('join-notifications', (userId) => {
+      socket.join(`notifications:${userId}`);
+      logger.info(`Socket ${socket.id} joined notifications:${userId}`);
+    });
+
+    socket.on('disconnect', (reason) => {
+      logger.info(`Client disconnected: ${socket.id} - ${reason}`);
+    });
+
+    socket.on('error', (error) => {
+      logger.error(`Socket error: ${error}`);
+    });
+  });
+} else {
+  // On Vercel, no persistent server or socket.io
+  global.io = null;
+}
+
+// Middleware to attach io to request object (works even if io is null)
+app.use((req, res, next) => {
+  req.io = global.io;
+  next();
 });
-
-// make io available in req handlers if desired
-global.io = io;
 
 // ----------------------
 // Basic security / performance middleware
@@ -149,12 +195,6 @@ app.use((req, res, next) => {
 // ----------------------
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url} - ${req.ip}`);
-  next();
-});
-
-// make io available on req (for controllers that need it)
-app.use((req, res, next) => {
-  req.io = io;
   next();
 });
 
@@ -437,56 +477,28 @@ app.use(notFound);
 app.use(errorHandler);
 
 // ----------------------
-// Socket.io handling
+// DB connect and server start (only when NOT on Vercel)
 // ----------------------
-io.on('connection', (socket) => {
-  logger.info(`New client connected: ${socket.id}`);
-
-  socket.on('join-analytics', (alias) => {
-    socket.join(`analytics:${alias}`);
-    logger.info(`Socket ${socket.id} joined analytics:${alias}`);
-  });
-
-  socket.on('leave-analytics', (alias) => {
-    socket.leave(`analytics:${alias}`);
-    logger.info(`Socket ${socket.id} left analytics:${alias}`);
-  });
-
-  socket.on('join-notifications', (userId) => {
-    socket.join(`notifications:${userId}`);
-    logger.info(`Socket ${socket.id} joined notifications:${userId}`);
-  });
-
-  socket.on('disconnect', (reason) => {
-    logger.info(`Client disconnected: ${socket.id} - ${reason}`);
-  });
-
-  socket.on('error', (error) => {
-    logger.error(`Socket error: ${error}`);
-  });
-});
-
-// ----------------------
-// DB connect and server start
-// ----------------------
-(async () => {
-  try {
-    if (typeof connectDB === 'function') {
-      await connectDB();
-    } else {
-      logger.warn('connectDB is not a function. Check config/database export.');
+if (!process.env.VERCEL) {
+  (async () => {
+    try {
+      if (typeof connectDB === 'function') {
+        await connectDB();
+      } else {
+        logger.warn('connectDB is not a function. Check config/database export.');
+      }
+    } catch (err) {
+      logger.error(`Initial DB connection attempt failed: ${err.message}`);
     }
-  } catch (err) {
-    logger.error(`Initial DB connection attempt failed: ${err.message}`);
-  }
 
-  const PORT = process.env.PORT || 5000;
-  server.listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
-    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    logger.info(`Frontend URL: ${process.env.FRONTEND_URL}`);
-  });
-})();
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info(`Frontend URL: ${process.env.FRONTEND_URL}`);
+    });
+  })();
+}
 
 // ----------------------
 // Process-level error handlers – PREVENT SERVER HANGING
@@ -508,22 +520,37 @@ process.on('uncaughtException', (err) => {
 
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
+  if (server) {
+    server.close(() => {
+      mongoose.connection.close(false, () => {
+        logger.info('MongoDB connection closed.');
+        process.exit(0);
+      });
+    });
+  } else {
     mongoose.connection.close(false, () => {
-      logger.info('MongoDB connection closed.');
       process.exit(0);
     });
-  });
+  }
 });
 
 process.on('SIGINT', () => {
   logger.info('SIGINT received. Shutting down gracefully...');
-  server.close(() => {
+  if (server) {
+    server.close(() => {
+      mongoose.connection.close(false, () => {
+        logger.info('MongoDB connection closed.');
+        process.exit(0);
+      });
+    });
+  } else {
     mongoose.connection.close(false, () => {
-      logger.info('MongoDB connection closed.');
       process.exit(0);
     });
-  });
+  }
 });
 
-module.exports = { app, server };
+// ----------------------
+// Export the Express app for Vercel serverless
+// ----------------------
+module.exports = app;
