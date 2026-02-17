@@ -97,7 +97,12 @@ exports.listUrls = async (req, res) => {
     const skip = (page - 1) * limit;
     const query = {};
     if (search) query.$or = [{ alias: { $regex: search, $options: 'i' } }, { longUrl: { $regex: search, $options: 'i' } }];
-    const urls = await Url.find(query).sort({ createdAt: -1 }).skip(parseInt(skip)).limit(parseInt(limit)).lean();
+    const urls = await Url.find(query)
+      .sort({ createdAt: -1 })
+      .skip(parseInt(skip))
+      .limit(parseInt(limit))
+      .populate('owner', 'username email')   // <-- added populate
+      .lean();
     const total = await Url.countDocuments(query);
     res.json({ success: true, data: { urls, pagination: { page: parseInt(page), limit: parseInt(limit), total } } });
   } catch (error) {
@@ -152,8 +157,21 @@ exports.getAdminStats = async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
     const totalUrls = await Url.countDocuments();
-    const totalClicks = await Url.aggregate([{ $group: { _id: null, clicks: { $sum: '$clicks' } } }]);
-    res.json({ success: true, data: { totalUsers, totalUrls, totalClicks: totalClicks[0]?.clicks || 0 } });
+    const totalClicksAgg = await Url.aggregate([{ $group: { _id: null, clicks: { $sum: '$clicks' } } }]);
+    const totalClicks = totalClicksAgg[0]?.clicks || 0;
+    const activeUsers = await User.countDocuments({ isRestricted: false }); // assuming active means not restricted
+    const restrictedUrls = await Url.countDocuments({ restricted: true });
+
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        totalUrls,
+        totalClicks,
+        activeUsers,
+        restrictedUrls
+      }
+    });
   } catch (error) {
     logger.error('getAdminStats error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch admin stats' });

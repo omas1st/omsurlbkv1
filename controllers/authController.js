@@ -8,6 +8,10 @@ const { sendEmail } = require('../utils/emailService');
 const logger = require('../utils/logger');
 const { COIN_VALUES } = require('../config/constants');
 
+// Admin credentials from environment variables
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
 // Generate JWT Token
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET || 'your-secret-key', {
@@ -202,7 +206,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// Login user (regular user login) - NEVER FAIL LOGIN ON COIN/NOTIFICATION ERRORS
+// Login user (regular user login) - NOW SUPPORTS ADMIN LOGIN VIA ENV VARIABLES
 exports.login = async (req, res) => {
   try {
     const { usernameOrEmail, password } = req.body;
@@ -215,18 +219,61 @@ exports.login = async (req, res) => {
     }
 
     // Find user by email or username
-    const user = await User.findOne({
+    let user = await User.findOne({
       $or: [
         { email: usernameOrEmail.toLowerCase() },
         { username: usernameOrEmail.toLowerCase() },
       ],
     }).select('+password +refreshToken');
 
+    // --- SPECIAL ADMIN HANDLING ---
+    // If user not found and the input matches ADMIN_EMAIL, create the admin user on the fly
+    if (!user && ADMIN_EMAIL && usernameOrEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      // Generate a unique username based on 'admin'
+      let baseUsername = 'admin';
+      let username = baseUsername;
+      let counter = 1;
+      while (await User.findOne({ username })) {
+        username = `${baseUsername}${counter}`;
+        counter++;
+      }
+
+      // Create admin user with password from env
+      user = new User({
+        username,
+        email: ADMIN_EMAIL.toLowerCase(),
+        password: ADMIN_PASSWORD,   // will be hashed by pre-save hook
+        isAdmin: true,
+        isVerified: true,            // admin is automatically verified
+      });
+
+      await user.save();
+      logger.info(`Admin user created automatically: ${username} (${ADMIN_EMAIL})`);
+    }
+
     if (!user) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
       });
+    }
+
+    // Check password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials',
+      });
+    }
+
+    // --- ENSURE ADMIN FLAG IF EMAIL MATCHES ADMIN_EMAIL ---
+    if (ADMIN_EMAIL && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+      if (!user.isAdmin) {
+        user.isAdmin = true;
+        await user.save();
+        logger.info(`User ${user.email} promoted to admin on login`);
+      }
     }
 
     // Check if user is restricted
@@ -240,15 +287,6 @@ exports.login = async (req, res) => {
         success: false,
         message: 'Account restricted',
         reason: `${reason}. ${expires}`,
-      });
-    }
-
-    // Check password
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials',
       });
     }
 
@@ -335,7 +373,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// Admin login (separate endpoint)
+// Admin login (separate endpoint - kept for backward compatibility)
 exports.adminLogin = async (req, res) => {
   try {
     const { username, password } = req.body;
