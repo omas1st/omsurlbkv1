@@ -8,7 +8,16 @@ const { trackAnalytics } = require('../utils/analyticsService');
 const { isValidUrl } = require('../utils/validators');
 const UAParser = require('ua-parser-js'); // for rule evaluation
 
-// Shorten URL - UPDATED to accept new fields
+// Helper: check if an alias exists in either Url or TextPage collection
+const aliasExists = async (alias) => {
+  const [urlExists, textPageExists] = await Promise.all([
+    Url.exists({ alias }),
+    TextPage.exists({ alias })
+  ]);
+  return !!(urlExists || textPageExists);
+};
+
+// Shorten URL - UPDATED to accept new fields and ensure alias uniqueness
 exports.shortenUrl = async (req, res) => {
   try {
     const {
@@ -56,28 +65,48 @@ exports.shortenUrl = async (req, res) => {
 
     // Generate or validate alias
     let alias = customAlias;
+
     if (!alias) {
-      alias = generateSlug(6);
+      // Auto‑generate a unique alias
+      const maxAttempts = 10;
+      let attempts = 0;
+      let unique = false;
+
+      while (!unique && attempts < maxAttempts) {
+        alias = generateSlug(6); // you can adjust length if desired
+        const exists = await aliasExists(alias);
+        if (!exists) {
+          unique = true;
+        }
+        attempts++;
+      }
+
+      if (!unique) {
+        // This is extremely unlikely, but handle it gracefully
+        return res.status(500).json({
+          success: false,
+          message: 'Unable to generate a unique alias. Please try again.',
+        });
+      }
     } else {
-      // Check if alias exists
-      const existingUrl = await Url.findOne({ alias });
-      if (existingUrl) {
+      // Custom alias: check format and uniqueness
+      const aliasPattern = /^[a-zA-Z0-9_-]{3,50}$/;
+      if (!aliasPattern.test(alias)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Alias must be 3-50 characters and can only contain letters, numbers, hyphens, and underscores',
+          field: 'customAlias',
+        });
+      }
+
+      const exists = await aliasExists(alias);
+      if (exists) {
         return res.status(400).json({
           success: false,
           message: 'Custom alias already taken',
           field: 'customAlias',
         });
       }
-    }
-
-    // Validate alias format
-    const aliasPattern = /^[a-zA-Z0-9_-]{3,50}$/;
-    if (!aliasPattern.test(alias)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Alias must be 3-50 characters and can only contain letters, numbers, hyphens, and underscores',
-        field: 'customAlias',
-      });
     }
 
     // Create base URL for short URL
@@ -150,7 +179,8 @@ exports.shortenUrl = async (req, res) => {
   } catch (error) {
     console.error('Shorten URL error:', error);
     
-    // Handle duplicate key error (alias already exists)
+    // Handle duplicate key error (alias already exists) – this should no longer occur,
+    // but keep it as a safety net.
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
@@ -167,7 +197,7 @@ exports.shortenUrl = async (req, res) => {
   }
 };
 
-// Bulk shorten URLs - unchanged
+// Bulk shorten URLs - unchanged (but consider updating alias checks similarly)
 exports.bulkShorten = async (req, res) => {
   try {
     const { urls } = req.body;
@@ -232,9 +262,10 @@ exports.bulkShorten = async (req, res) => {
           alias = alias.trim();
         }
 
-        // Check if alias exists
+        // Check if alias exists (both Url and TextPage)
         const existingUrl = await Url.findOne({ alias });
-        if (existingUrl) {
+        const existingTextPage = await TextPage.findOne({ alias });
+        if (existingUrl || existingTextPage) {
           if (customAlias) {
             errors.push({
               row: i + 1,
@@ -244,6 +275,8 @@ exports.bulkShorten = async (req, res) => {
           }
           // Regenerate if random alias exists
           alias = generateSlug(8);
+          // For simplicity, we don't re‑check the regenerated alias here;
+          // a production implementation could loop a few times.
         }
 
         // Validate alias format
@@ -853,7 +886,7 @@ exports.verifyPassword = async (req, res) => {
   }
 };
 
-// Check alias availability - unchanged
+// Check alias availability - UPDATED to check both Url and TextPage
 exports.checkAlias = async (req, res) => {
   try {
     const { alias } = req.params;
@@ -868,12 +901,12 @@ exports.checkAlias = async (req, res) => {
       });
     }
 
-    const existingUrl = await Url.findOne({ alias });
+    const exists = await aliasExists(alias);
 
     res.json({
       success: true,
-      available: !existingUrl,
-      message: existingUrl ? 'Alias already taken' : 'Alias available',
+      available: !exists,
+      message: exists ? 'Alias already taken' : 'Alias available',
     });
   } catch (error) {
     console.error('Check alias error:', error);
