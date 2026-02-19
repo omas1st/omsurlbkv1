@@ -115,7 +115,7 @@ exports.register = async (req, res) => {
 
     // Add registration bonus - NEVER FAIL REGISTRATION
     try {
-      await user.addCoins(COIN_VALUES.URL_CREATED || 50, 'registration_bonus');
+      await user.addCoins(COIN_VALUES.REGISTRATION_BONUS || 100, 'registration_bonus');
     } catch (coinError) {
       logger.error('Registration bonus error:', coinError);
     }
@@ -124,7 +124,7 @@ exports.register = async (req, res) => {
     try {
       await sendEmail({
         to: email,
-        subject: 'Welcome to Short.ly - Your URL Shortening Platform',
+        subject: 'Welcome to OmsUrl.com - Your URL Shortening Platform',
         template: 'welcome',
         context: {
           username,
@@ -150,18 +150,6 @@ exports.register = async (req, res) => {
       await user.updateLastLogin();
     } catch (updateError) {
       logger.error('updateLastLogin error after registration:', updateError);
-    }
-
-    // Create welcome notification - NEVER FAIL REGISTRATION
-    try {
-      await Notification.createNotification(user._id, {
-        type: 'system_announcement',
-        title: 'Welcome to Short.ly!',
-        message: 'Thank you for joining our platform. You have received coins as a welcome bonus!',
-        important: true,
-      });
-    } catch (notifError) {
-      logger.error('Welcome notification error:', notifError);
     }
 
     // Remove sensitive data from response
@@ -303,17 +291,8 @@ exports.login = async (req, res) => {
 
     if (lastLoginDate !== today) {
       try {
-        await user.addCoins(COIN_VALUES.DAILY_LOGIN || 2, 'daily_login');
-
-        // Weekly streak bonus notification
-        if (user.stats.consecutiveLogins >= 7) {
-          await Notification.createNotification(user._id, {
-            type: 'coin_earned',
-            title: 'Weekly Streak Bonus!',
-            message: `You've logged in for ${user.stats.consecutiveLogins} consecutive days!`,
-            data: { amount: (COIN_VALUES.DAILY_LOGIN || 2) * 2 },
-          });
-        }
+        await user.addCoins(COIN_VALUES.DAILY_LOGIN || 10, 'daily_login');
+        // Weekly streak notification removed to speed up login
       } catch (coinError) {
         logger.error('Daily login bonus error:', coinError);
         // DO NOT FAIL LOGIN
@@ -327,18 +306,6 @@ exports.login = async (req, res) => {
     // Save refresh token
     user.refreshToken = refreshToken;
     await user.save();
-
-    // Create login notification – log error but don't fail login
-    try {
-      await Notification.createNotification(user._id, {
-        type: 'login_alert',
-        title: 'New Login',
-        message: `Successful login from ${req.ip}`,
-        important: false,
-      });
-    } catch (notifError) {
-      logger.error('Login notification error:', notifError);
-    }
 
     // Remove sensitive data from response
     const userResponse = {
@@ -546,7 +513,7 @@ exports.forgotPassword = async (req, res) => {
     try {
       await sendEmail({
         to: user.email,
-        subject: 'Password Reset Request - Short.ly',
+        subject: 'Password Reset Request - OmsUrl.com',
         template: 'password-reset',
         context: {
           username: user.username,
@@ -628,7 +595,7 @@ exports.resetPassword = async (req, res) => {
     try {
       await sendEmail({
         to: user.email,
-        subject: 'Password Reset Successful - Short.ly',
+        subject: 'Password Reset Successful - OmsUrl.com',
         template: 'password-reset-success',
         context: {
           username: user.username,

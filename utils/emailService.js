@@ -47,8 +47,8 @@ function initializeTransporter() {
         },
         // Force IPv4 to avoid IPv6 delays
         family: 4,
-        debug: true,
-        logger: true,
+        debug: false,
+        logger: false,
       });
 
       // Test connection asynchronously (doesn't block startup)

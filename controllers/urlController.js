@@ -8,7 +8,7 @@ const { trackAnalytics } = require('../utils/analyticsService');
 const { isValidUrl } = require('../utils/validators');
 const UAParser = require('ua-parser-js'); // for rule evaluation
 
-// Shorten URL - UPDATED to accept new fields
+// Shorten URL - UPDATED to deduct coins for splash screen
 exports.shortenUrl = async (req, res) => {
   try {
     const {
@@ -78,6 +78,42 @@ exports.shortenUrl = async (req, res) => {
         message: 'Alias must be 3-50 characters and can only contain letters, numbers, hyphens, and underscores',
         field: 'customAlias',
       });
+    }
+
+    // ----- COIN DEDUCTION FOR SPLASH SCREEN -----
+    if (splashScreen && splashScreen.enabled) {
+      // User must be logged in to use splash screen
+      if (!req.user) {
+        return res.status(401).json({
+          success: false,
+          message: 'You must be logged in to use the splash screen feature',
+        });
+      }
+
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found',
+        });
+      }
+
+      const COST_SPLASH = 40;
+      if (user.coins < COST_SPLASH) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient coins. You need ${COST_SPLASH} coins to use the splash screen.`,
+        });
+      }
+
+      try {
+        await user.removeCoins(COST_SPLASH, 'splash_screen_usage');
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+        });
+      }
     }
 
     // Create base URL for short URL
@@ -167,7 +203,7 @@ exports.shortenUrl = async (req, res) => {
   }
 };
 
-// Bulk shorten URLs - unchanged
+// Bulk shorten URLs - UPDATED to deduct coins
 exports.bulkShorten = async (req, res) => {
   try {
     const { urls } = req.body;
@@ -186,6 +222,32 @@ exports.bulkShorten = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Maximum 1000 URLs per bulk request',
+      });
+    }
+
+    // ----- COIN DEDUCTION FOR BULK UPLOAD -----
+    const COST_BULK = 40;
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    if (user.coins < COST_BULK) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient coins. You need ${COST_BULK} coins to use bulk upload.`,
+      });
+    }
+
+    try {
+      await user.removeCoins(COST_BULK, 'bulk_upload_usage');
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message,
       });
     }
 

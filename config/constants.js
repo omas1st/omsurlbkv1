@@ -5,13 +5,10 @@ module.exports = {
   
   // Coin System - FIXED with proper defaults
   COIN_VALUES: {
-    URL_CREATED: 10,
-    QR_CREATED: 15,
-    TEXT_PAGE_CREATED: 20,
-    REFERRAL_BONUS: 100,
-    DAILY_LOGIN: 5,
+    REFERRAL_BONUS: 10,
+    DAILY_LOGIN: 10,                // changed from 5 to 10
     PER_1000_VISITORS: 50,
-    REGISTRATION_BONUS: 50, // Added this
+    REGISTRATION_BONUS: 100,         // changed from 20 to 100
   },
   
   // Tier Limits
