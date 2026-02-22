@@ -8,8 +8,40 @@ const sharp = require('sharp');
 const { COIN_VALUES } = require('../config/constants');
 const logger = require('../utils/logger');
 const { isValidUrl } = require('../utils/validators');
+const { generateSlug } = require('../utils/helpers');
 
-// Generate QR Code - UPDATED to accept any URL format
+// Default customization values (must match frontend defaults)
+const DEFAULT_CUSTOMIZATION = {
+  qrColor: '#000000',
+  bgColor: '#FFFFFF',
+  includeText: false,
+  text: '',
+  textPosition: 'bottom',
+  textColor: '#000000',
+  textFont: 'Arial',
+  textSize: 16,
+  logo: null,
+  logoSize: 40,
+  margin: 4
+};
+
+// Helper to check if customization is non‑default
+const isCustomized = (customization, hasLogoFile) => {
+  if (hasLogoFile) return true;
+  if (!customization) return false;
+  // Compare each field with default
+  for (const key of Object.keys(DEFAULT_CUSTOMIZATION)) {
+    // If field exists and differs from default → customized
+    if (customization[key] !== undefined && customization[key] !== DEFAULT_CUSTOMIZATION[key]) {
+      // Special handling for logo: if it's a data URL, it's customized even if value is not null
+      if (key === 'logo' && customization.logo) return true;
+      if (key !== 'logo') return true; // any other field change
+    }
+  }
+  return false;
+};
+
+// Generate QR Code – UPDATED with coin deduction for customization
 exports.generateQR = async (req, res) => {
   try {
     const {
@@ -32,10 +64,7 @@ exports.generateQR = async (req, res) => {
       });
     }
 
-    // Trim the URL
     const trimmedUrl = destinationUrl.trim();
-    
-    // Validate URL format
     if (!isValidUrl(trimmedUrl)) {
       return res.status(400).json({
         success: false,
@@ -44,7 +73,7 @@ exports.generateQR = async (req, res) => {
       });
     }
 
-    // Normalize URL - ensure it has a protocol for QR code generation
+    // Normalize URL – ensure protocol
     let normalizedUrl = trimmedUrl;
     if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
       normalizedUrl = 'http://' + normalizedUrl;
@@ -57,6 +86,46 @@ exports.generateQR = async (req, res) => {
         return res.status(403).json({
           success: false,
           message: 'QR code limit reached. Upgrade your tier to create more.',
+        });
+      }
+    }
+
+    // --- CUSTOMIZATION COIN HANDLING ---
+    const hasLogoFile = !!(req.files && req.files.logo && req.files.logo.length > 0);
+    const customized = isCustomized(customization, hasLogoFile);
+
+    if (customized) {
+      // Customization requires login
+      if (!req.user) {
+        return res.status(401).json({
+          success: false,
+          message: 'You must be logged in to use QR code customization.',
+        });
+      }
+
+      // Deduct coins
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found',
+        });
+      }
+
+      const cost = COIN_VALUES.QR_CUSTOMIZATION; // 40
+      if (user.coins < cost) {
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient coins. You need ${cost} coins to use QR customization.`,
+        });
+      }
+
+      try {
+        await user.removeCoins(cost, 'qr_customization');
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
         });
       }
     }
@@ -77,7 +146,6 @@ exports.generateQR = async (req, res) => {
           field: 'customAlias',
         });
       }
-      // Regenerate if random alias exists
       alias = generateSlug(8);
     }
 
@@ -102,17 +170,14 @@ exports.generateQR = async (req, res) => {
       },
     };
 
-    // Generate QR code data URL using normalized URL
     const qrCodeDataUrl = await QRCodeGenerator.toDataURL(normalizedUrl, qrCodeOptions);
 
     // Process QR code with customization
     let qrCodeBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64');
     
     // Add logo if provided
-    if (customization.logo && req.files?.logo) {
+    if (hasLogoFile) {
       const logoFile = req.files.logo[0];
-      
-      // Resize logo
       const logoSize = customization.logoSize || 40;
       const logoBuffer = await sharp(logoFile.buffer)
         .resize(logoSize, logoSize, {
@@ -121,7 +186,6 @@ exports.generateQR = async (req, res) => {
         })
         .toBuffer();
       
-      // Composite logo onto QR code
       qrCodeBuffer = await sharp(qrCodeBuffer)
         .composite([{ input: logoBuffer, gravity: 'center' }])
         .toBuffer();
@@ -142,8 +206,8 @@ exports.generateQR = async (req, res) => {
     const qrCode = new QRCodeModel({
       alias,
       shortUrl: `${process.env.BASE_URL || process.env.FRONTEND_URL}/${alias}`,
-      destinationUrl: normalizedUrl, // Store normalized URL
-      originalUrl: trimmedUrl, // Store original input for reference
+      destinationUrl: normalizedUrl,
+      originalUrl: trimmedUrl,
       owner: req.user ? req.user.id : null,
       customization: {
         qrColor: customization.qrColor || '#000000',
@@ -179,14 +243,13 @@ exports.generateQR = async (req, res) => {
       },
     });
 
-    // Set password if provided
     if (password) {
       qrCode.setPassword(password);
     }
 
     await qrCode.save();
 
-    // Update user stats and add coins
+    // Update user stats and add coins for creation (if logged in)
     if (req.user) {
       const user = await User.findById(req.user.id);
       await user.updateStats();
@@ -700,8 +763,7 @@ exports.scanQRCode = async (req, res) => {
   }
 };
 
-// ==================== FIXED DOWNLOAD FUNCTION ====================
-// Download QR code image – now uses stored Cloudinary image if available
+// Download QR code image – uses stored Cloudinary image if available
 exports.downloadQRCode = async (req, res) => {
   try {
     const { id } = req.params;
@@ -765,16 +827,6 @@ exports.downloadQRCode = async (req, res) => {
     });
   }
 };
-
-// Helper function to generate slug
-function generateSlug(length) {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
 
 // Helper function to get QR code status
 function getQRStatus(qr) {

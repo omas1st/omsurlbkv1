@@ -8,7 +8,9 @@ module.exports = {
     REFERRAL_BONUS: 10,
     DAILY_LOGIN: 10,                // changed from 5 to 10
     PER_1000_VISITORS: 50,
-    REGISTRATION_BONUS: 100,         // changed from 20 to 100
+    REGISTRATION_BONUS: 100,        // changed from 20 to 100
+    QR_CUSTOMIZATION: 40,            // <-- NEW: cost for QR customization
+    QR_CREATED: 5,
   },
   
   // Tier Limits
