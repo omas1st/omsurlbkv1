@@ -25,7 +25,7 @@ const getDateRange = (timeRange, from, to) => {
       endDate = new Date(); // now
       break;
 
-    case 'yesterday':
+    case 'yesterday': {
       const yesterday = new Date(now);
       yesterday.setDate(yesterday.getDate() - 1);
       startDate = new Date(yesterday);
@@ -33,43 +33,50 @@ const getDateRange = (timeRange, from, to) => {
       endDate = new Date(yesterday);
       endDate.setHours(23, 59, 59, 999);
       break;
+    }
 
-    case 'last7days':
+    case 'last7days': {
       startDate = new Date(now);
-      startDate.setDate(startDate.getDate() - 7);
-      startDate.setHours(0, 0, 0, 0);
-      endDate = new Date(); // now
-      break;
-
-    case 'last30days':
-      startDate = new Date(now);
-      startDate.setDate(startDate.getDate() - 30);
+      startDate.setDate(startDate.getDate() - 6); // include today (6 days back + today = 7 days)
       startDate.setHours(0, 0, 0, 0);
       endDate = new Date();
       break;
+    }
 
-    case 'last60days':
+    case 'last30days': {
       startDate = new Date(now);
-      startDate.setDate(startDate.getDate() - 60);
+      startDate.setDate(startDate.getDate() - 29);
       startDate.setHours(0, 0, 0, 0);
       endDate = new Date();
       break;
+    }
 
-    case 'lastYear':
+    case 'last60days': {
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 59);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date();
+      break;
+    }
+
+    case 'lastYear': {
       startDate = new Date(now);
       startDate.setFullYear(startDate.getFullYear() - 1);
       startDate.setHours(0, 0, 0, 0);
       endDate = new Date();
       break;
+    }
 
-    case 'custom':
+    case 'custom': {
+      // from/to should be date strings (YYYY-MM-DD) or ISO strings
       startDate = from ? new Date(from) : new Date(0);
       startDate.setHours(0, 0, 0, 0);
       endDate = to ? new Date(to) : new Date();
       endDate.setHours(23, 59, 59, 999);
       break;
+    }
 
-    default: // 'overall'
+    default: // 'overall' or unknown
       startDate = new Date(0); // epoch
       endDate = new Date(); // now
   }
@@ -90,16 +97,29 @@ const getUserAliases = async (userId) => {
   return [...urlAliases, ...textAliases];
 };
 
+/**
+ * Normalize and parse possible query variations for timeframe/from/to.
+ * Accepts: timeframe, timeRange, range, from, start, to, end
+ * Returns: { timeframe, fromParam, toParam, startDate, endDate, timezone }
+ */
+const parseRangeFromQuery = (query = {}, defaultTimeframe = 'overall') => {
+  const timeframe = (query.timeframe || query.timeRange || query.range || defaultTimeframe).toString();
+  const fromParam = query.from || query.start || null;
+  const toParam = query.to || query.end || null;
+  const timezone = query.timezone || query.tz || 'utc';
+  const { startDate, endDate } = getDateRange(timeframe, fromParam, toParam);
+  return { timeframe, fromParam, toParam, startDate, endDate, timezone };
+};
+
 // ======================
-// EXISTING METHODS (KEEP)
+// EXISTING METHODS (KEEP, but made date-filter consistent)
 // ======================
 
 exports.getTimeSeries = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end } = req.query;
-    const startDate = start ? new Date(start) : new Date(Date.now() - 1000 * 60 * 60 * 24 * 30);
-    const endDate = end ? new Date(end) : new Date();
+    const { timeframe = 'last30days' } = req.query;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, timeframe);
 
     const timeSeriesData = await Analytics.find({
       alias,
@@ -126,16 +146,13 @@ exports.getTimeSeries = async (req, res) => {
 exports.getCountries = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end, limit = 10 } = req.query;
-    const startDate = start ? new Date(start) : null;
-    const endDate = end ? new Date(end) : null;
+    const limit = req.query.limit || 10;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
-    const matchStage = { alias };
-    if (startDate || endDate) {
-      matchStage.date = {};
-      if (startDate) matchStage.date.$gte = startDate;
-      if (endDate) matchStage.date.$lte = endDate;
-    }
+    const matchStage = {
+      alias,
+      date: { $gte: startDate, $lte: endDate }
+    };
 
     const aggregation = await Analytics.aggregate([
       { $match: matchStage },
@@ -150,7 +167,7 @@ exports.getCountries = async (req, res) => {
         },
       },
       { $sort: { visitors: -1 } },
-      { $limit: parseInt(limit) },
+      { $limit: parseInt(limit, 10) },
       {
         $project: {
           country: '$_id.country',
@@ -171,16 +188,12 @@ exports.getCountries = async (req, res) => {
 exports.getDevices = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end } = req.query;
-    const startDate = start ? new Date(start) : null;
-    const endDate = end ? new Date(end) : null;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
-    const matchStage = { alias };
-    if (startDate || endDate) {
-      matchStage.date = {};
-      if (startDate) matchStage.date.$gte = startDate;
-      if (endDate) matchStage.date.$lte = endDate;
-    }
+    const matchStage = {
+      alias,
+      date: { $gte: startDate, $lte: endDate }
+    };
 
     const aggregation = await Analytics.aggregate([
       { $match: matchStage },
@@ -209,15 +222,18 @@ exports.getDevices = async (req, res) => {
 exports.getReferrers = async (req, res) => {
   try {
     const { alias } = req.params;
-    const docs = await Analytics.aggregate([
-      { $match: { alias } },
+    const limit = req.query.limit || 20;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
+
+    const aggregation = await Analytics.aggregate([
+      { $match: { alias, date: { $gte: startDate, $lte: endDate } } },
       { $unwind: '$data.referrers' },
       { $group: { _id: '$data.referrers.domain', visitors: { $sum: '$data.referrers.visitors' } } },
       { $sort: { visitors: -1 } },
-      { $limit: 20 },
+      { $limit: parseInt(limit, 10) },
       { $project: { domain: '$_id', visitors: 1, _id: 0 } },
     ]);
-    res.json({ success: true, data: docs });
+    res.json({ success: true, data: aggregation });
   } catch (error) {
     logger.error('getReferrers error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch referrers' });
@@ -227,9 +243,7 @@ exports.getReferrers = async (req, res) => {
 exports.getBrowsers = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end } = req.query;
-    const startDate = start ? new Date(start) : new Date(0);
-    const endDate = end ? new Date(end) : new Date();
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
     const aggregation = await Analytics.aggregate([
       {
@@ -263,16 +277,12 @@ exports.getBrowsers = async (req, res) => {
 exports.getOS = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end } = req.query;
-    const startDate = start ? new Date(start) : null;
-    const endDate = end ? new Date(end) : null;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
-    const matchStage = { alias };
-    if (startDate || endDate) {
-      matchStage.date = {};
-      if (startDate) matchStage.date.$gte = startDate;
-      if (endDate) matchStage.date.$lte = endDate;
-    }
+    const matchStage = {
+      alias,
+      date: { $gte: startDate, $lte: endDate }
+    };
 
     const aggregation = await Analytics.aggregate([
       { $match: matchStage },
@@ -400,8 +410,10 @@ exports.trackTextView = async (req, res) => {
 exports.exportData = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { format = 'json' } = req.query;
-    const docs = await Analytics.find({ alias }).sort({ date: 1 }).lean();
+    const format = req.query.format || 'json';
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
+
+    const docs = await Analytics.find({ alias, date: { $gte: startDate, $lte: endDate } }).sort({ date: 1 }).lean();
 
     if (format === 'csv') {
       const header = 'date,totalVisitors,totalClicks,uniqueVisitors\n';
@@ -421,10 +433,7 @@ exports.exportData = async (req, res) => {
 exports.getHourly = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end, timeframe, timezone } = req.query;
-
-    const startDate = start ? new Date(start) : new Date(Date.now() - 1000 * 60 * 60 * 24 * 30);
-    const endDate = end ? new Date(end) : new Date();
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'last30days');
 
     const matchStage = { alias, date: { $gte: startDate, $lte: endDate } };
 
@@ -468,8 +477,12 @@ exports.getHourly = async (req, res) => {
 
 exports.getHourlyMinute = async (req, res) => {
   try {
+    // This endpoint currently returns empty array in original file.
+    // Keep this placeholder but accept date range params for future implementation.
     const { alias } = req.params;
-    const { hour, start, end } = req.query;
+    // parse query to keep behavior consistent (not used currently)
+    parseRangeFromQuery(req.query, 'today');
+    // No implementation available - return empty for now
     res.json({ success: true, data: [] });
   } catch (error) {
     logger.error('getHourlyMinute error:', error);
@@ -480,38 +493,28 @@ exports.getHourlyMinute = async (req, res) => {
 exports.getLanguages = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { start, end, limit = 20 } = req.query;
+    const limit = req.query.limit || 20;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
-    const startDate = start ? new Date(start) : null;
-    const endDate = end ? new Date(end) : null;
-
-    const matchStage = { alias };
-    if (startDate || endDate) {
-      matchStage.date = {};
-      if (startDate) matchStage.date.$gte = startDate;
-      if (endDate) matchStage.date.$lte = endDate;
-    }
+    const matchStage = { alias, date: { $gte: startDate, $lte: endDate } };
 
     const aggregation = await Analytics.aggregate([
       { $match: matchStage },
       { $unwind: '$data.languages' },
       {
         $group: {
-          _id: {
-            code: '$data.languages.code',
-            name: '$data.languages.name',
-          },
+          _id: { code: '$data.languages.code', name: '$data.languages.name' },
           visitors: { $sum: '$data.languages.visitors' },
         },
       },
       { $sort: { visitors: -1 } },
-      { $limit: parseInt(limit) },
+      { $limit: parseInt(limit, 10) },
       {
         $project: {
           code: '$_id.code',
           name: '$_id.name',
           visitors: 1,
-          _id: 0,
+          _id: 0
         },
       },
     ]);
@@ -526,8 +529,30 @@ exports.getLanguages = async (req, res) => {
 exports.getRecentVisitors = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { limit = 10 } = req.query;
-    res.json({ success: true, data: [] });
+    const limit = req.query.limit || 10;
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
+
+    const aggregation = await Analytics.aggregate([
+      { $match: { alias, date: { $gte: startDate, $lte: endDate } } },
+      { $unwind: '$data.recentVisitors' },
+      { $sort: { 'data.recentVisitors.timestamp': -1 } },
+      { $limit: parseInt(limit, 10) },
+      {
+        $project: {
+          timestamp: '$data.recentVisitors.timestamp',
+          country: '$data.recentVisitors.country',
+          countryCode: '$data.recentVisitors.countryCode',
+          city: '$data.recentVisitors.city',
+          browser: '$data.recentVisitors.browser',
+          os: '$data.recentVisitors.os',
+          device: '$data.recentVisitors.device',
+          referrer: '$data.recentVisitors.referrer',
+          _id: 0
+        }
+      }
+    ]);
+
+    res.json({ success: true, data: aggregation });
   } catch (error) {
     logger.error('getRecentVisitors error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch recent visitors' });
@@ -537,6 +562,7 @@ exports.getRecentVisitors = async (req, res) => {
 exports.getSankey = async (req, res) => {
   try {
     const { alias } = req.params;
+    // Sankey is usually derived from rules rather than time-series; keep simple placeholder
     res.json({
       success: true,
       data: {
@@ -551,7 +577,7 @@ exports.getSankey = async (req, res) => {
 };
 
 // ======================
-// ENHANCED METHODS (with recentVisitors and full summary)
+// ENHANCED METHODS (with recentVisitors and full summary) — unified date handling
 // ======================
 
 /**
@@ -561,9 +587,7 @@ exports.getSankey = async (req, res) => {
 exports.getOverall = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { timeframe = 'overall', from, to, timezone = 'utc' } = req.query;
-
-    const { startDate, endDate } = getDateRange(timeframe, from, to);
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
     const aliases = await getUserAliases(userId);
     if (aliases.length === 0) {
@@ -880,7 +904,6 @@ exports.getOverall = async (req, res) => {
 exports.getUrlAnalytics = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { timeframe = 'overall', from, to, timezone = 'utc' } = req.query;
 
     // Check resource existence and privacy
     let resource = await Url.findOne({ alias });
@@ -908,7 +931,7 @@ exports.getUrlAnalytics = async (req, res) => {
       }
     }
 
-    const { startDate, endDate } = getDateRange(timeframe, from, to);
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
     // First, check if any analytics documents exist for this alias in the date range
     const count = await Analytics.countDocuments({
@@ -1135,7 +1158,6 @@ exports.getUrlAnalytics = async (req, res) => {
 exports.getPublicUrlAnalytics = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { timeframe = 'overall', from, to, timezone = 'utc' } = req.query;
 
     // Check resource existence
     let resource = await Url.findOne({ alias });
@@ -1161,7 +1183,7 @@ exports.getPublicUrlAnalytics = async (req, res) => {
       });
     }
 
-    const { startDate, endDate } = getDateRange(timeframe, from, to);
+    const { startDate, endDate } = parseRangeFromQuery(req.query, 'overall');
 
     const matchStage = {
       alias,
