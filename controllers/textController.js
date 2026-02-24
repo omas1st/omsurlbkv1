@@ -225,90 +225,97 @@ exports.getAllTextPages = async (req, res) => {
 exports.getTextPage = async (req, res) => {
   try {
     const { alias } = req.params;
-    const { password } = req.body;
-    
+    const { password } = req.query; // ✅ password now from query, not body
+
     const textPage = await TextPage.findOne({ alias }).select('+password');
-    
+
     if (!textPage) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Text page not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Text page not found'
       });
     }
 
     // Check if text page is active
     if (!textPage.active) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Text page is paused' 
+      return res.status(403).json({
+        success: false,
+        message: 'Text page is paused'
       });
     }
 
     // Check if text page is restricted
     if (textPage.restricted) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Text page is restricted' 
+      return res.status(403).json({
+        success: false,
+        message: 'Text page is restricted'
       });
     }
 
     // Check if text page has expired
     if (textPage.expirationDate && new Date() > textPage.expirationDate) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Text page has expired' 
+      return res.status(403).json({
+        success: false,
+        message: 'Text page has expired'
       });
     }
 
     // Check password if required
     if (textPage.password) {
       if (!password) {
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Password required', 
-          requiresPassword: true, 
-          passwordNote: textPage.passwordNote 
+        return res.status(401).json({
+          success: false,
+          message: 'Password required',
+          requiresPassword: true,
+          passwordNote: textPage.passwordNote
         });
       }
-      
+
       if (!textPage.checkPassword(password)) {
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Invalid password', 
-          requiresPassword: true 
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid password',
+          requiresPassword: true
         });
       }
     }
 
     // Track analytics
     try {
-      const analyticsData = await analyticsService.trackAnalytics({ 
-        alias: textPage.alias, 
-        type: 'text', 
-        owner: textPage.owner 
+      const analyticsData = await analyticsService.trackAnalytics({
+        alias: textPage.alias,
+        type: 'text',
+        owner: textPage.owner
       }, req);
-      
+
       await textPage.incrementViews(analyticsData.isUnique);
     } catch (analyticsError) {
       logger.warn('Analytics tracking error:', analyticsError.message);
-      // Don't fail the request if analytics fails
+    }
+
+    // Filter replies: only show approved ones to non‑owners
+    const isOwner = req.user && textPage.owner && textPage.owner.toString() === req.user.id;
+    let replies = textPage.replies || [];
+    if (!isOwner) {
+      replies = replies.filter(reply => reply.approved === true);
     }
 
     // Remove password from response
     const textPageResponse = textPage.toObject();
     delete textPageResponse.password;
-    
-    res.json({ 
-      success: true, 
-      data: { 
-        textPage: textPageResponse 
-      } 
+    textPageResponse.replies = replies;
+
+    res.json({
+      success: true,
+      data: {
+        textPage: textPageResponse
+      }
     });
   } catch (error) {
     logger.error('getTextPage error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch text page' 
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch text page'
     });
   }
 };
@@ -459,10 +466,15 @@ exports.addReply = async (req, res) => {
       name: name || (req.user ? req.user.username : 'Anonymous') || 'Anonymous',
       email: email || null,
       message: message.trim(),
-      approved: textPage.owner ? false : true, // Auto-approve if no owner
+      approved: true, // ✅ Always approve immediately (no pending)
     };
 
     const savedReply = await textPage.addReply(replyData);
+
+    // ✅ Emit real-time update via Socket.IO
+    if (req.io) {
+      req.io.to(`text:${textPage._id}`).emit(`text_replies:${textPage._id}`, savedReply);
+    }
 
     // Notify owner (if different from replier)
     if (textPage.owner && textPage.owner.toString() !== (req.user ? req.user.id : null)) {

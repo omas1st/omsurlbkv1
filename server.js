@@ -81,6 +81,20 @@ if (!process.env.VERCEL) {
       logger.info(`Socket ${socket.id} joined notifications:${userId}`);
     });
 
+    // ✅ New: Subscribe to real-time text page replies
+    socket.on('subscribe_text_replies', ({ textId }) => {
+      if (!textId) return;
+      socket.join(`text:${textId}`);
+      logger.info(`Socket ${socket.id} subscribed to text replies for ${textId}`);
+    });
+
+    // ✅ New: Unsubscribe from text page replies
+    socket.on('unsubscribe_text_replies', ({ textId }) => {
+      if (!textId) return;
+      socket.leave(`text:${textId}`);
+      logger.info(`Socket ${socket.id} unsubscribed from text replies for ${textId}`);
+    });
+
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${socket.id} - ${reason}`);
     });
